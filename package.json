@@ -1,0 +1,31 @@
+{
+  "name": "kerf",
+  "version": "1.0.0",
+  "description": "A 3D slicing, toolpath generation, and kinodynamic motion planning engine in LiveScript. It slices meshes, generates continuous infills, and exports optimized G-code",
+  "main": "src/index.ls",
+  "bin": {
+    "kerf": "bin/kerf"
+  },
+  "scripts": {
+    "build": "npx lsc -c -o dist src",
+    "test": "node test/run_tests.js",
+    "benchmark": "node test/run_benchmarks.js",
+    "demo": "node bin/kerf demo",
+    "verify": "python3 scripts/verify_no_em_dashes.py && npm test"
+  },
+  "keywords": [
+    "computational-geometry",
+    "slicing-engine",
+    "toolpath-generation",
+    "gcode",
+    "kinematics",
+    "additive-manufacturing",
+    "cnc",
+    "livescript"
+  ],
+  "author": "Aneesh Krishna Parthasarathy <aneeshkrishnaparthasarathy@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "livescript": "^1.6.1"
+  }
+}
