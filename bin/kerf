@@ -1,0 +1,227 @@
+#!/usr/bin/env node
+
+// Command-line interface for Kerf 3D Slicing and Kinodynamics Engine
+require('livescript');
+const path = require('path');
+const fs = require('fs');
+
+const {
+  KerfEngine,
+  MeshPrimitives,
+  STLParser,
+  STLWriter,
+  OBJParser,
+  OBJWriter,
+  MeshRepair,
+  TerminalRenderer,
+  SVGExporter,
+  AsciiArt,
+  GcodeInterpreter
+} = require('../src/index');
+
+const args = process.argv.slice(2);
+
+function printHelp() {
+  console.log(AsciiArt.BANNER);
+  console.log('  ' + AsciiArt.TAGLINE);
+  console.log('\nUsage:');
+  console.log('  kerf slice <file.stl|file.obj> [options]');
+  console.log('  kerf info <file.stl|file.obj>');
+  console.log('  kerf preview <file.stl|file.obj> [--layer <index>]');
+  console.log('  kerf demo [--pattern <rectilinear|gyroid|honeycomb>]');
+  console.log('  kerf benchmark');
+  console.log('  kerf --help');
+  console.log('\nOptions:');
+  console.log('  -o, --out <path>         Output G-code filepath');
+  console.log('  -l, --layer-height <mm>  Layer height in mm (default: 0.20)');
+  console.log('  -i, --infill <pct>       Infill density 0.0 to 1.0 (default: 0.20)');
+  console.log('  -p, --pattern <name>     Infill pattern (rectilinear, gyroid, honeycomb, grid, concentric, hilbert)');
+  console.log('  --perimeters <count>     Number of perimeter shells (default: 2)');
+  console.log('  --adaptive               Enable curvature-driven adaptive layer height');
+  console.log('  --svg <path>             Export 2D slice toolpath to SVG vector file');
+  console.log('  --preview                Render ANSI 256-color terminal slice preview');
+}
+
+if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
+  printHelp();
+  process.exit(0);
+}
+
+const command = args[0];
+
+function parseOpts(rawArgs) {
+  const opts = {
+    layerHeight: 0.2,
+    infillDensity: 0.20,
+    infillPattern: 'rectilinear',
+    perimeters: 2,
+    outPath: null,
+    svgPath: null,
+    showPreview: false,
+    previewLayer: null,
+    adaptive: false
+  };
+
+  for (let i = 1; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a === '-o' || a === '--out') opts.outPath = rawArgs[++i];
+    else if (a === '-l' || a === '--layer-height') opts.layerHeight = parseFloat(rawArgs[++i]);
+    else if (a === '-i' || a === '--infill') opts.infillDensity = parseFloat(rawArgs[++i]);
+    else if (a === '-p' || a === '--pattern') opts.infillPattern = rawArgs[++i];
+    else if (a === '--perimeters') opts.perimeters = parseInt(rawArgs[++i], 10);
+    else if (a === '--svg') opts.svgPath = rawArgs[++i];
+    else if (a === '--preview') opts.showPreview = true;
+    else if (a === '--layer') opts.previewLayer = parseInt(rawArgs[++i], 10);
+    else if (a === '--adaptive') opts.adaptive = true;
+  }
+  return opts;
+}
+
+function loadMesh(filepath) {
+  if (!fs.existsSync(filepath)) {
+    console.error(`Error: File not found: ${filepath}`);
+    process.exit(1);
+  }
+  const ext = path.extname(filepath).toLowerCase();
+  if (ext === '.stl') {
+    return STLParser.parseFile(filepath);
+  } else if (ext === '.obj') {
+    return OBJParser.parseFile(filepath);
+  } else {
+    console.error(`Error: Unsupported format "${ext}". Supported: .stl, .obj`);
+    process.exit(1);
+  }
+}
+
+if (command === 'info') {
+  const filepath = args[1];
+  if (!filepath) {
+    console.error('Error: specify input mesh file.');
+    process.exit(1);
+  }
+  const mesh = loadMesh(filepath);
+  const bounds = mesh.getBounds();
+  const size = bounds.size();
+  const stats = mesh.getEdgeManifoldStats();
+
+  console.log(AsciiArt.formatHeader('GEOMETRIC MESH INSPECTION'));
+  console.log(AsciiArt.formatTable([
+    ['File', path.basename(filepath)],
+    ['Triangles', mesh.triangleCount()],
+    ['Bounding Box', `${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} mm`],
+    ['Surface Area', `${mesh.totalSurfaceArea().toFixed(2)} mm^2`],
+    ['Enclosed Volume', `${mesh.totalVolume().toFixed(2)} mm^3`],
+    ['Total Edges', stats.totalEdges],
+    ['Manifold Edges', stats.manifoldEdges],
+    ['Boundary Edges', stats.boundaryEdges],
+    ['Watertight Hull', stats.isClosed ? 'YES (Clean 2-manifold)' : 'NO (Open boundaries detected)']
+  ]));
+  process.exit(0);
+}
+
+if (command === 'demo') {
+  const opts = parseOpts(args);
+  console.log(AsciiArt.BANNER);
+  console.log('  Running end-to-end digital fabrication pipeline demonstration...\n');
+
+  // Procedural gear model
+  console.log('Generating procedural mechanical gear mesh...');
+  const mesh = MeshPrimitives.createGear(10, 12.0, 2.5, 4.0);
+  console.log(`Created gear: ${mesh.triangleCount()} triangles, closed watertight manifold.`);
+
+  const engine = new KerfEngine({
+    layerHeight: 0.25,
+    infillDensity: 0.25,
+    infillPattern: opts.infillPattern || 'gyroid',
+    perimeters: 2
+  });
+
+  const tStart = Date.now();
+  const result = engine.sliceMesh(mesh);
+  const elapsedMs = Date.now() - tStart;
+
+  console.log(`\nSlicing complete: ${result.layerCount} layers processed in ${elapsedMs}ms.`);
+
+  // Terminal preview of middle layer
+  const midLayerIdx = Math.floor(result.layerCount / 2);
+  const midLayer = result.layers[midLayerIdx];
+  console.log('\n' + TerminalRenderer.renderLayer(midLayer, 50, 22));
+
+  console.log(AsciiArt.formatHeader('VIRTUAL MACHINE KINEMATICS REPORT'));
+  console.log(AsciiArt.formatTable([
+    ['Total Print Time', result.metrics.formattedTime],
+    ['Total Filament Extruded', `${(result.metrics.totalFilamentMm / 1000).toFixed(2)} m`],
+    ['Filament Mass', `${result.metrics.filamentMassGrams.toFixed(2)} g (PLA)`],
+    ['Total G-code Lines', result.gcode.split('\n').length],
+    ['Max Z Elevation', `${result.metrics.maxZ.toFixed(2)} mm`],
+    ['Infill Topology', opts.infillPattern || 'gyroid']
+  ]));
+
+  console.log('\nDemo finished smoothly with zero errors.');
+  process.exit(0);
+}
+
+if (command === 'slice') {
+  const filepath = args[1];
+  if (!filepath) {
+    console.error('Error: specify input mesh file to slice.');
+    process.exit(1);
+  }
+  const opts = parseOpts(args);
+  const mesh = loadMesh(filepath);
+
+  const engine = new KerfEngine({
+    layerHeight: opts.layerHeight,
+    infillDensity: opts.infillDensity,
+    infillPattern: opts.infillPattern,
+    perimeters: opts.perimeters,
+    adaptive: opts.adaptive
+  });
+
+  const tStart = Date.now();
+  const result = engine.sliceMesh(mesh);
+  const elapsedMs = Date.now() - tStart;
+
+  console.log(AsciiArt.formatHeader('SLICING RUN SUMMARY'));
+  console.log(AsciiArt.formatTable([
+    ['Mesh File', path.basename(filepath)],
+    ['Triangles', mesh.triangleCount()],
+    ['Layer Height', `${opts.layerHeight} mm${opts.adaptive ? ' (Adaptive curvature)' : ''}`],
+    ['Total Layers', result.layerCount],
+    ['Infill', `${Math.round(opts.infillDensity * 100)}% (${opts.infillPattern})`],
+    ['Estimated Print Time', result.metrics.formattedTime],
+    ['Filament Consumed', `${(result.metrics.totalFilamentMm / 1000).toFixed(2)} m (${result.metrics.filamentMassGrams.toFixed(2)} g)`],
+    ['Processing Latency', `${elapsedMs} ms`]
+  ]));
+
+  if (opts.showPreview || opts.previewLayer !== null) {
+    const idx = opts.previewLayer !== null ? opts.previewLayer : Math.floor(result.layerCount / 2);
+    if (idx >= 0 && idx < result.layers.length) {
+      console.log('\n' + TerminalRenderer.renderLayer(result.layers[idx], 60, 26));
+    }
+  }
+
+  if (opts.svgPath) {
+    const idx = opts.previewLayer !== null ? opts.previewLayer : Math.floor(result.layerCount / 2);
+    if (idx >= 0 && idx < result.layers.length) {
+      SVGExporter.writeFile(result.layers[idx], opts.svgPath);
+      console.log(`\nExported layer ${idx} SVG preview: ${opts.svgPath}`);
+    }
+  }
+
+  if (opts.outPath) {
+    fs.writeFileSync(opts.outPath, result.gcode, 'utf8');
+    console.log(`\nSaved production G-code: ${opts.outPath}`);
+  }
+
+  process.exit(0);
+}
+
+if (command === 'benchmark') {
+  require('../test/run_benchmarks');
+  process.exit(0);
+}
+
+console.error(`Unknown command: ${command}`);
+printHelp();
+process.exit(1);
