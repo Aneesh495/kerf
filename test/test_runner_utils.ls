@@ -20,7 +20,7 @@ describe = (name, fn) ->
     failed-tests := failed-tests + 1
   suite-stack.pop!
 
-it = (name, fn) ->
+test-case = (name, fn) ->
   total-tests := total-tests + 1
   try
     fn!
@@ -51,7 +51,8 @@ reset-counts = ->
 
 module.exports = {
   describe
-  it
+  test-case
+  test: test-case
   assert
   assert-approx
   get-summary
